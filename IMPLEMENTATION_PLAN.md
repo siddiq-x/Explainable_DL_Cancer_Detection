@@ -28,6 +28,9 @@
 
 **Deliverables:** Mounted dataset, patient-wise manifest (committed), documented class distribution.
 
+> **✅ Done (real-data run on Kaggle):** Manifest built & committed at `data/manifest.csv`.
+> **1566 patients · 3568 abnormalities.** Class distribution (merged binary): **BENIGN 2111 / MALIGNANT 1457** (~59/41 — informs PR-AUC + class weighting in Chunks 3–4). Verification: **0/3568 images missing**, **1/3568 masks missing** (a known CBIS-DDSM source defect — that lesion is still usable for classification; it is simply excluded from the Grad-CAM-vs-ROI IoU check in Chunk 6).
+
 ---
 
 ## Chunk 1 — Project Setup & Environment
@@ -233,7 +236,7 @@ Requirements → Verification → Model Validation → Explanation-vs-ROI Valida
 
 | Chunk | Title | Scope | Status |
 |:-----:|-------|:-----:|:------:|
-| 0 | Dataset Selection & Acquisition | MVP | 🟡 |
+| 0 | Dataset Selection & Acquisition | MVP | ✅ |
 | 1 | Project Setup & Environment | MVP | ✅ |
 | 2 | Data Loading & Preprocessing | MVP | ✅ |
 | 3 | Baseline Classification Model | MVP | ⬜ |
