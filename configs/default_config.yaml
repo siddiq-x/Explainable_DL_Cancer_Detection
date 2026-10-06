@@ -1,0 +1,31 @@
+# Default Hyperparameters & Configuration
+experiment_name: "baseline_resnet50"
+seed: 42
+
+data:
+  image_size: 224
+  batch_size: 32
+  num_workers: 4
+  # Local defaults. Override at runtime WITHOUT editing this file by setting:
+  #   CANCER_DATASET_DIR    -> overrides dataset_dir
+  #   CANCER_MANIFEST_PATH  -> overrides manifest_path
+  # On Kaggle the full dataset is mounted read-only, e.g.:
+  #   export CANCER_DATASET_DIR=/kaggle/input/cbis-ddsm-breast-cancer-image-dataset
+  #   export CANCER_MANIFEST_PATH=/kaggle/working/manifest.csv
+  dataset_dir: "data/raw"
+  manifest_path: "data/manifest.csv"
+  test_split_ratio: 0.15
+  val_split_ratio: 0.15
+
+model:
+  backbone: "resnet50"
+  pretrained: true
+  num_classes: 2
+  freeze_layers: false
+
+training:
+  epochs: 30
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  early_stopping_patience: 5
+  checkpoint_dir: "checkpoints"
