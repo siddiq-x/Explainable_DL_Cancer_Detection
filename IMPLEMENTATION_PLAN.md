@@ -77,7 +77,7 @@
 
 **Deliverables:** Trained baseline checkpoint, training/validation loss curves.
 
-> **Status:** code + unit tests complete — `src/models/classifier.py` (ResNet-18/34/50 & EfficientNet-B0 backbones, custom head, layer freezing), `src/models/losses.py` (focal / weighted BCE), `src/models/trainer.py` (Adam, LR scheduler, grad-clip, early stopping, best/last checkpoints), `train.py` CLI, and `tests/test_model.py` (shape, freezing, loss, tiny-batch overfit, trainer smoke). **Pending:** the real-data training run on a Kaggle/Colab GPU to produce the baseline checkpoint + loss curves.
+> **✅ Done (real-data run on Kaggle GPU).** ResNet-50 + focal loss (γ=2, α=0.25), Adam, `ReduceLROnPlateau`, grad-clip, early stopping. Patient-wise splits: **train 2536 / val 506 / test 526**. Early-stopped at epoch 13 (patience 5); **best checkpoint = epoch 8 — val_loss 0.0607, val_acc 0.698**. Artifacts: `checkpoints/baseline_resnet50/best.pt` (stores model/optimizer state, config, full history) and `loss_curves.png` — kept as Kaggle outputs (not committed). *Accuracy at a 0.5 threshold understates performance on imbalanced data; the clinical-grade metrics (ROC-AUC, PR-AUC, sensitivity) are the job of Chunk 4.*
 
 ---
 
@@ -241,7 +241,7 @@ Requirements → Verification → Model Validation → Explanation-vs-ROI Valida
 | 0 | Dataset Selection & Acquisition | MVP | ✅ |
 | 1 | Project Setup & Environment | MVP | ✅ |
 | 2 | Data Loading & Preprocessing | MVP | ✅ |
-| 3 | Baseline Classification Model | MVP | 🟡 |
+| 3 | Baseline Classification Model | MVP | ✅ |
 | 4 | Evaluation & Metrics | MVP | ⬜ |
 | 5 | Explainability Engine | MVP | ⬜ |
 | 6 | Verification & Validation | MVP | ⬜ |
