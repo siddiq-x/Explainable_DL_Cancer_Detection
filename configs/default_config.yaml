@@ -18,7 +18,7 @@ data:
   val_split_ratio: 0.15
 
 model:
-  backbone: "resnet50"
+  backbone: "resnet50"   # resnet18 | resnet34 | resnet50 | efficientnet_b0
   pretrained: true
   num_classes: 2
   freeze_layers: false
@@ -29,3 +29,19 @@ training:
   weight_decay: 0.00001
   early_stopping_patience: 5
   checkpoint_dir: "checkpoints"
+  device: "auto"          # auto | cpu | cuda
+  grad_clip: 1.0          # max grad-norm; null/0 disables clipping
+  monitor: "val_loss"     # val_loss (lower better) | val_acc (higher better)
+
+  # Class-imbalance handling (CBIS-DDSM is ~59% benign / 41% malignant).
+  loss:
+    type: "focal"         # focal | bce
+    gamma: 2.0            # focal focusing parameter
+    alpha: 0.25           # focal positive-class balance (null to disable)
+    class_weighting: false # apply pos_weight (num_neg/num_pos) to the loss
+
+  scheduler:
+    type: "reduce_on_plateau"  # none | reduce_on_plateau | cosine | step
+    factor: 0.5
+    patience: 2
+    min_lr: 0.000001

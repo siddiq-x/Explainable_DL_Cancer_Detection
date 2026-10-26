@@ -16,6 +16,19 @@ RAW_DATA_DIR = 'data/raw'
 def manifest_exists():
     return os.path.exists(MANIFEST_PATH)
 
+
+def _image_available_locally(df):
+    """Whether the manifest's image paths resolve under the local data dir.
+
+    The committed manifest is the real (Kaggle-built) CBIS-DDSM manifest whose
+    paths (``jpeg/1.3.6.../...``) only exist on the cloud mount. Locally we only
+    have the tiny mock images, so image-loading tests must skip rather than fail.
+    """
+    if len(df) == 0:
+        return False
+    rel_path = str(df.iloc[0]['image_path']).replace('/', os.sep)
+    return os.path.exists(os.path.join(RAW_DATA_DIR, rel_path))
+
 def test_splits_no_patient_leakage(manifest_exists):
     if not manifest_exists:
         pytest.skip("Manifest not found. Run scripts/setup_dataset.py first.")
@@ -37,7 +50,13 @@ def test_dataset_output_shapes_and_types(manifest_exists):
         
     train_df, _, _ = create_splits(MANIFEST_PATH)
     transform = get_base_transforms(image_size=224)
-    
+
+    if not _image_available_locally(train_df):
+        pytest.skip(
+            "Manifest references images not present locally (Kaggle-mounted "
+            "CBIS-DDSM). Run scripts/setup_dataset.py for mock data instead."
+        )
+
     dataset = MammographyDataset(train_df, root_dir=RAW_DATA_DIR, transform=transform)
     
     assert len(dataset) > 0

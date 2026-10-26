@@ -77,6 +77,8 @@
 
 **Deliverables:** Trained baseline checkpoint, training/validation loss curves.
 
+> **Status:** code + unit tests complete — `src/models/classifier.py` (ResNet-18/34/50 & EfficientNet-B0 backbones, custom head, layer freezing), `src/models/losses.py` (focal / weighted BCE), `src/models/trainer.py` (Adam, LR scheduler, grad-clip, early stopping, best/last checkpoints), `train.py` CLI, and `tests/test_model.py` (shape, freezing, loss, tiny-batch overfit, trainer smoke). **Pending:** the real-data training run on a Kaggle/Colab GPU to produce the baseline checkpoint + loss curves.
+
 ---
 
 ## Chunk 4 — Evaluation & Metrics Module
@@ -239,7 +241,7 @@ Requirements → Verification → Model Validation → Explanation-vs-ROI Valida
 | 0 | Dataset Selection & Acquisition | MVP | ✅ |
 | 1 | Project Setup & Environment | MVP | ✅ |
 | 2 | Data Loading & Preprocessing | MVP | ✅ |
-| 3 | Baseline Classification Model | MVP | ⬜ |
+| 3 | Baseline Classification Model | MVP | 🟡 |
 | 4 | Evaluation & Metrics | MVP | ⬜ |
 | 5 | Explainability Engine | MVP | ⬜ |
 | 6 | Verification & Validation | MVP | ⬜ |

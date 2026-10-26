@@ -51,5 +51,27 @@ This project builds an explainable deep learning pipeline for early breast cance
    ```
    Commit the generated `manifest.csv` (it is small) so the data path is reproducible without re-mounting the full dataset. If compute/access is constrained, use the **PCam fallback** documented in `docs/dataset.md`.
 
+## Training
+Train the baseline benign-vs-malignant classifier with `train.py`. Hyperparameters
+live in `configs/default_config.yaml` and can be overridden on the CLI.
+
+```bash
+# Local smoke test on mock data (CPU, no weight download)
+python train.py --epochs 2 --batch-size 8 --backbone resnet18 --no-pretrained --num-workers 0
+
+# Full run on a cloud GPU (Kaggle/Colab), pointing at the mounted dataset
+export CANCER_DATASET_DIR=/kaggle/input/cbis-ddsm-breast-cancer-image-dataset
+export CANCER_MANIFEST_PATH=/kaggle/working/manifest.csv
+python train.py --config configs/default_config.yaml
+```
+
+- **Backbones:** `resnet18` · `resnet34` · `resnet50` · `efficientnet_b0`
+  (`model.backbone`; pass `--freeze-layers` to train only the head).
+- **Class imbalance** is handled via a **focal loss** (default) or class-weighted
+  BCE — see the `training.loss` block in the config.
+- **Outputs:** checkpoints in `checkpoints/<experiment_name>/{best,last}.pt`
+  (each stores the model/optimizer state, config and metric history), logs in
+  `logs/<experiment_name>.log`.
+
 ## Reproducibility
 We ensure reproducibility via global seeding utilities in `src/utils/seeding.py` and strict hyperparameter tracking. Dataset locations are overridable via the `CANCER_DATASET_DIR` and `CANCER_MANIFEST_PATH` environment variables, so the identical codebase runs unchanged on a laptop (mock data) and on a cloud GPU (full dataset).
