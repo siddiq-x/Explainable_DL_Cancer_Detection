@@ -1,6 +1,6 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from typing import Tuple
+from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+from typing import List, Tuple
 
 def create_splits(manifest_path: str, test_size: float = 0.15, val_size: float = 0.15, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -47,3 +47,51 @@ def create_splits(manifest_path: str, test_size: float = 0.15, val_size: float =
     test_df = df[df['patient_id'].isin(test_patients['patient_id'])].copy()
     
     return train_df, val_df, test_df
+
+
+def create_stratified_group_kfold(
+    manifest_path: str,
+    k: int = 5,
+    seed: int = 42,
+) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
+    """Create patient-wise, stratified K-fold splits for cross-validation.
+
+    Patients (not images) are the grouping unit, so no patient appears in both
+    the train and validation part of a fold — the same leakage guarantee as
+    :func:`create_splits`, but repeated ``k`` times with a different held-out set
+    each time.
+
+    Args:
+        manifest_path: Path to the manifest CSV.
+        k: Number of folds.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        A list of ``(train_df, val_df)`` tuples, one per fold.
+    """
+    df = pd.read_csv(manifest_path)
+    # Normalize to the binary task for stratification (BENIGN_WITHOUT_CALLBACK -> BENIGN).
+    df = df.copy()
+    df["label"] = df["label"].astype(str).str.upper().str.strip()
+    df["label"] = df["label"].where(df["label"] == "MALIGNANT", "BENIGN")
+
+    patients = df.groupby("patient_id")["label"].first().reset_index()
+    if patients["patient_id"].nunique() < k:
+        raise ValueError(
+            f"Not enough patients ({patients['patient_id'].nunique()}) for k={k} folds."
+        )
+
+    splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+    folds: List[Tuple[pd.DataFrame, pd.DataFrame]] = []
+    for train_idx, val_idx in splitter.split(
+        patients, y=patients["label"], groups=patients["patient_id"]
+    ):
+        train_patients = set(patients.iloc[train_idx]["patient_id"])
+        val_patients = set(patients.iloc[val_idx]["patient_id"])
+        folds.append(
+            (
+                df[df["patient_id"].isin(train_patients)].copy(),
+                df[df["patient_id"].isin(val_patients)].copy(),
+            )
+        )
+    return folds

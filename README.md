@@ -73,5 +73,28 @@ python train.py --config configs/default_config.yaml
   (each stores the model/optimizer state, config and metric history), logs in
   `logs/<experiment_name>.log`.
 
+## Evaluation
+Evaluate a trained checkpoint on the held-out test split (or `--split all` for
+train/val/test):
+
+```bash
+python evaluate.py --checkpoint checkpoints/baseline_resnet50/best.pt --split all
+```
+
+This writes `reports/<experiment>/<split>/` containing `metrics.json`,
+`classification_report.txt`, `roc_curve.png`, `pr_curve.png` and
+`confusion_matrix.png`. Reported metrics: accuracy, precision,
+sensitivity/recall, specificity, F1, **ROC-AUC** and **PR-AUC** (plus the
+confusion-matrix counts).
+
+Patient-wise stratified **K-fold cross-validation** (mean ± std stability):
+
+```bash
+python evaluate.py --k-folds 5
+```
+
+> Metrics are compared against **published CBIS-DDSM baselines** (typical
+> ROC-AUC ≈ 0.80–0.87). They are targets for context, **not pass/fail gates**.
+
 ## Reproducibility
 We ensure reproducibility via global seeding utilities in `src/utils/seeding.py` and strict hyperparameter tracking. Dataset locations are overridable via the `CANCER_DATASET_DIR` and `CANCER_MANIFEST_PATH` environment variables, so the identical codebase runs unchanged on a laptop (mock data) and on a cloud GPU (full dataset).

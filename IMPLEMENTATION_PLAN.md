@@ -96,6 +96,8 @@
 
 **Deliverables:** Classification report, ROC + PR curves, confusion matrix.
 
+> **Status:** code + unit tests complete — `src/evaluation/metrics.py` (accuracy, precision, sensitivity, specificity, F1, ROC-AUC, PR-AUC, confusion matrix, Youden-J threshold), `src/evaluation/evaluator.py` (checkpoint loading, inference, `metrics.json` + report + ROC/PR/confusion plots), `evaluate.py` CLI (`--split train|val|test|all`, and `--k-folds` for patient-wise stratified CV), `tests/test_metrics.py`, `tests/test_evaluator.py`. Epoch-level validation AUC is now tracked while training (`training.monitor: val_auc`). **Pending:** run `evaluate.py` on Kaggle against `checkpoints/baseline_resnet50/best.pt` to produce the real test-split report and curves.
+
 ---
 
 ## Chunk 5 — Explainability Engine  *(moved up — must exist before V&V)*
@@ -242,7 +244,7 @@ Requirements → Verification → Model Validation → Explanation-vs-ROI Valida
 | 1 | Project Setup & Environment | MVP | ✅ |
 | 2 | Data Loading & Preprocessing | MVP | ✅ |
 | 3 | Baseline Classification Model | MVP | ✅ |
-| 4 | Evaluation & Metrics | MVP | ⬜ |
+| 4 | Evaluation & Metrics | MVP | 🟡 |
 | 5 | Explainability Engine | MVP | ⬜ |
 | 6 | Verification & Validation | MVP | ⬜ |
 | 7 | Lesion Localization | Stretch | ⬜ |

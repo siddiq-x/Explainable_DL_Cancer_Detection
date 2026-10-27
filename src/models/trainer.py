@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from src.data.dataset import unpack_batch
 from src.models.losses import build_criterion
 from src.utils.logging_setup import setup_logger
 
@@ -73,23 +75,6 @@ def _build_scheduler(
     raise ValueError(
         f"Unsupported scheduler type '{sched_type}'. "
         "Expected 'none', 'reduce_on_plateau', 'cosine' or 'step'."
-    )
-
-
-def _unpack_batch(batch: Any) -> Tuple[Any, Any]:
-    """Extract ``(images, labels)`` from a batch.
-
-    Supports the dict batches produced by
-    :class:`src.data.dataset.MammographyDataset` as well as plain
-    ``(image, label)`` tuples/lists (useful for lightweight synthetic datasets).
-    """
-    if isinstance(batch, Mapping):
-        return batch["image"], batch["label"]
-    if isinstance(batch, (list, tuple)) and len(batch) >= 2:
-        return batch[0], batch[1]
-    raise TypeError(
-        "Unsupported batch type: expected a dict with 'image'/'label' keys "
-        "or an (image, label) tuple."
     )
 
 
@@ -152,21 +137,31 @@ class Trainer:
             "train_acc": [],
             "val_loss": [],
             "val_acc": [],
+            "val_auc": [],
             "lr": [],
         }
         self.start_epoch = 0
         self.best_score = float("inf") if self._lower_is_better else -float("inf")
         self.epochs_no_improve = 0
 
-    def _run_epoch(self, loader: DataLoader, train: bool) -> Tuple[float, float]:
-        """Run one pass over ``loader``; return ``(mean_loss, accuracy)``."""
+    def _run_epoch(
+        self, loader: DataLoader, train: bool
+    ) -> Tuple[float, float, np.ndarray, np.ndarray]:
+        """Run one pass over ``loader``.
+
+        Returns:
+            ``(mean_loss, accuracy, y_true, y_prob)`` where the label/probability
+            arrays enable epoch-level AUC tracking.
+        """
         self.model.train(train)
         total_loss = 0.0
         correct = 0
         total = 0
+        all_true: List[float] = []
+        all_prob: List[float] = []
 
         for batch in loader:
-            images, labels = _unpack_batch(batch)
+            images, labels = unpack_batch(batch)
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True).float()
 
@@ -185,14 +180,22 @@ class Trainer:
                         )
                     self.optimizer.step()
 
+            probs = torch.sigmoid(logits.reshape(-1))
             batch_size = images.size(0)
             total_loss += loss.item() * batch_size
-            preds = (torch.sigmoid(logits.reshape(-1)) >= 0.5).float()
+            preds = (probs >= 0.5).float()
             correct += (preds == labels.reshape(-1)).sum().item()
             total += batch_size
+            all_true.extend(labels.reshape(-1).detach().cpu().tolist())
+            all_prob.extend(probs.detach().cpu().tolist())
 
         total = max(total, 1)
-        return total_loss / total, correct / total
+        return (
+            total_loss / total,
+            correct / total,
+            np.asarray(all_true),
+            np.asarray(all_prob),
+        )
 
     def _save_checkpoint(self, filename: str, epoch: int, is_best: bool) -> str:
         """Persist model/optimizer state plus the config (reproducibility)."""
@@ -227,11 +230,14 @@ class Trainer:
         for epoch in range(self.start_epoch, self.epochs):
             started = time.time()
 
-            train_loss, train_acc = self._run_epoch(self.train_loader, train=True)
+            train_loss, train_acc, _, _ = self._run_epoch(self.train_loader, train=True)
             if self.val_loader is not None:
-                val_loss, val_acc = self._run_epoch(self.val_loader, train=False)
+                val_loss, val_acc, val_true, val_prob = self._run_epoch(
+                    self.val_loader, train=False
+                )
+                val_auc = self._safe_auc(val_true, val_prob)
             else:
-                val_loss, val_acc = train_loss, train_acc
+                val_loss, val_acc, val_auc = train_loss, train_acc, float("nan")
 
             if self.scheduler is not None:
                 if self._sched_on_plateau:
@@ -245,28 +251,32 @@ class Trainer:
                 ("train_acc", train_acc),
                 ("val_loss", val_loss),
                 ("val_acc", val_acc),
+                ("val_auc", val_auc),
                 ("lr", current_lr),
             ):
                 self.history[key].append(value)
 
             self.logger.info(
                 "Epoch %d/%d - train_loss %.4f - train_acc %.4f - "
-                "val_loss %.4f - val_acc %.4f - lr %.2e - %.1fs",
+                "val_loss %.4f - val_acc %.4f - val_auc %.4f - lr %.2e - %.1fs",
                 epoch + 1,
                 self.epochs,
                 train_loss,
                 train_acc,
                 val_loss,
                 val_acc,
+                val_auc,
                 current_lr,
                 time.time() - started,
             )
 
             self._save_checkpoint("last.pt", epoch, is_best=False)
 
-            score = val_loss if self._lower_is_better else val_acc
-            improved = (
-                score < self.best_score if self._lower_is_better else score > self.best_score
+            score = self._monitor_value(val_loss, val_acc, val_auc)
+            improved = np.isfinite(score) and (
+                score < self.best_score
+                if self._lower_is_better
+                else score > self.best_score
             )
             if improved:
                 self.best_score = score
@@ -285,3 +295,201 @@ class Trainer:
                     break
 
         return self.history
+
+    def _monitor_value(self, val_loss: float, val_acc: float, val_auc: float) -> float:
+        """Select the value to monitor for checkpointing/early stopping."""
+        return {
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "val_auc": val_auc,
+        }.get(self.monitor, val_loss)
+
+    @staticmethod
+    def _safe_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+        """ROC-AUC, or ``nan`` when undefined (e.g. single class in the split)."""
+        from sklearn.metrics import roc_auc_score
+
+        if np.unique(np.asarray(y_true)).size < 2:
+            return float("nan")
+        try:
+            return float(roc_auc_score(y_true, y_prob))
+        except ValueError:
+            return float("nan")
+
+
+def _aggregate(values: List[float]) -> Tuple[float, float]:
+    """Return ``(mean, std)`` ignoring NaNs; ``(nan, nan)`` if all are NaN."""
+    arr = np.asarray(values, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return float("nan"), float("nan")
+    return float(finite.mean()), float(finite.std())
+
+
+def cross_validate(
+    config: Mapping[str, Any],
+    model_factory: Callable[[], nn.Module],
+    manifest_path: str,
+    dataset_dir: str,
+    k: int = 5,
+    seed: Optional[int] = None,
+    device: Optional[str] = None,
+    logger: Optional[Any] = None,
+    output_dir: Optional[str] = None,
+    threshold: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Run patient-wise, stratified K-fold cross-validation.
+
+    Trains ``k`` independent models (one per fold) and reports per-fold
+    validation metrics plus a mean ± std summary — the stability check (V-10)
+    used to argue the baseline is not a fluke of one split.
+
+    Args:
+        config: Full parsed config (``data``/``training``/``evaluation``/...).
+        model_factory: Zero-arg callable returning a *fresh* untrained model.
+        manifest_path: Manifest CSV path.
+        dataset_dir: Root the manifest paths are relative to.
+        k: Number of folds.
+        seed: Overrides ``config["seed"]``.
+        device: ``"auto"``/``None``/``"cuda"``/``"cpu"``.
+        logger: Optional logger.
+        output_dir: When given, per-fold + summary results are written here as
+            ``kfold_results.json``.
+        threshold: Decision threshold for hard-label metrics (defaults to
+            ``config["evaluation"]["threshold"]`` or 0.5).
+
+    Returns:
+        Dict with ``folds`` (per-fold metrics + history) and ``summary``
+        (mean/std of roc_auc, pr_auc, f1, accuracy, sensitivity, specificity).
+    """
+    import json
+
+    # Lazy imports: keep the training import graph free of matplotlib/sklearn-metrics.
+    from src.data.augmentation import get_train_transforms
+    from src.data.dataset import MammographyDataset
+    from src.data.preprocessing import get_base_transforms
+    from src.data.splits import create_stratified_group_kfold
+    from src.evaluation.evaluator import collect_predictions
+    from src.evaluation.metrics import compute_binary_metrics
+
+    seed = int(seed if seed is not None else config.get("seed", 42))
+    data_cfg = config.get("data") or {}
+    image_size = int(data_cfg.get("image_size", 224))
+    batch_size = int(data_cfg.get("batch_size", 32))
+    num_workers = int(data_cfg.get("num_workers", 0))
+    eval_cfg = config.get("evaluation") or {}
+    threshold = float(
+        threshold if threshold is not None else eval_cfg.get("threshold", 0.5)
+    )
+
+    logger = logger or setup_logger()
+    folds_splits = create_stratified_group_kfold(manifest_path, k=k, seed=seed)
+    logger.info("[k-fold] running %d folds (patient-wise, stratified)", k)
+
+    folds: List[Dict[str, Any]] = []
+    collected: Dict[str, List[float]] = {
+        "roc_auc": [],
+        "pr_auc": [],
+        "f1": [],
+        "accuracy": [],
+        "sensitivity": [],
+        "specificity": [],
+    }
+
+    for fold_idx, (train_df, val_df) in enumerate(folds_splits):
+        train_ds = MammographyDataset(
+            train_df, root_dir=dataset_dir, transform=get_train_transforms(image_size)
+        )
+        val_ds = MammographyDataset(
+            val_df, root_dir=dataset_dir, transform=get_base_transforms(image_size)
+        )
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+
+        logger.info(
+            "[k-fold] fold %d/%d - train=%d val=%d",
+            fold_idx + 1,
+            k,
+            len(train_ds),
+            len(val_ds),
+        )
+        fold_name = f"{config.get('experiment_name', 'model')}_fold{fold_idx}"
+        trainer = Trainer(
+            model=model_factory(),
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config={**config, "experiment_name": fold_name},
+            device=device,
+            logger=logger,
+        )
+        history = trainer.train()
+
+        y_true, y_prob, _ = collect_predictions(
+            trainer.model, val_loader, device=str(trainer.device)
+        )
+        metrics = compute_binary_metrics(y_true, y_prob, threshold=threshold)
+        for key in collected:
+            collected[key].append(metrics[key])
+
+        folds.append(
+            {
+                "fold": fold_idx,
+                "n_train": len(train_ds),
+                "n_val": len(val_ds),
+                "metrics": metrics,
+                "history": {key: list(values) for key, values in history.items()},
+            }
+        )
+        logger.info(
+            "[k-fold] fold %d - roc_auc=%.4f pr_auc=%.4f f1=%.4f sens=%.4f spec=%.4f",
+            fold_idx + 1,
+            metrics["roc_auc"],
+            metrics["pr_auc"],
+            metrics["f1"],
+            metrics["sensitivity"],
+            metrics["specificity"],
+        )
+
+    summary: Dict[str, float] = {"k": float(k)}
+    for key, values in collected.items():
+        mean, std = _aggregate(values)
+        summary[f"{key}_mean"] = mean
+        summary[f"{key}_std"] = std
+
+    logger.info(
+        "[k-fold] summary - roc_auc=%.4f±%.4f  pr_auc=%.4f±%.4f  f1=%.4f±%.4f",
+        summary["roc_auc_mean"],
+        summary["roc_auc_std"],
+        summary["pr_auc_mean"],
+        summary["pr_auc_std"],
+        summary["f1_mean"],
+        summary["f1_std"],
+    )
+
+    result: Dict[str, Any] = {
+        "k": k,
+        "threshold": threshold,
+        "folds": folds,
+        "summary": summary,
+    }
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        out_path = os.path.join(output_dir, "kfold_results.json")
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, indent=2)
+        logger.info("[k-fold] results written to %s", out_path)
+
+    return result

@@ -31,7 +31,7 @@ training:
   checkpoint_dir: "checkpoints"
   device: "auto"          # auto | cpu | cuda
   grad_clip: 1.0          # max grad-norm; null/0 disables clipping
-  monitor: "val_loss"     # val_loss (lower better) | val_acc (higher better)
+  monitor: "val_loss"     # val_loss (lower better) | val_acc | val_auc (higher better)
 
   # Class-imbalance handling (CBIS-DDSM is ~59% benign / 41% malignant).
   loss:
@@ -45,3 +45,8 @@ training:
     factor: 0.5
     patience: 2
     min_lr: 0.000001
+
+evaluation:
+  threshold: 0.5        # decision threshold for hard-label metrics
+  output_dir: "reports" # reports/<experiment>/<split>/ -> metrics.json + plots
+  k_folds: 5            # folds for patient-wise stratified cross-validation

@@ -1,8 +1,33 @@
+"""PyTorch Dataset for CBIS-DDSM mammograms, plus the shared batch contract."""
+
+from __future__ import annotations
+
 import os
+from typing import Any, Mapping, Tuple
+
 from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
+
+
+def unpack_batch(batch: Any) -> Tuple[Any, Any]:
+    """Extract ``(images, labels)`` from a batch.
+
+    Supports the dict batches produced by :class:`MammographyDataset` as well as
+    plain ``(image, label)`` tuples/lists (useful for lightweight synthetic
+    datasets and tests). This is the single shared definition of the batch
+    contract used by the trainer and the evaluator.
+    """
+    if isinstance(batch, Mapping):
+        return batch["image"], batch["label"]
+    if isinstance(batch, (list, tuple)) and len(batch) >= 2:
+        return batch[0], batch[1]
+    raise TypeError(
+        "Unsupported batch type: expected a dict with 'image'/'label' keys "
+        "or an (image, label) tuple."
+    )
+
 
 class MammographyDataset(Dataset):
     """
