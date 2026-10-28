@@ -100,6 +100,8 @@
 
 > **Review and continuation (2026-10-28):** evaluation now uses checkpoint-saved seed/image size/split ratios, with explicit path overrides for Kaggle. Prediction CSVs and run metadata make reports traceable. Metrics validate binary inputs and serialize undefined values as JSON null. CV uses independent inner validation for early stopping, restores best weights, computes training-only class weights, and records fold seeds and exact patient assignments. Local tests cover the CLI with legacy checkpoints and stale environment paths, plus fold isolation/checkpoint selection. Resume with `notebooks/03_evaluation_kaggle.ipynb` and `docs/evaluation.md`. **Still pending: saved real test outputs; Chunk 4 remains 🟡.**
 
+> **Kaggle recovery submitted (2026-10-28):** the original training log was retrieved, but Kaggle exposes no saved checkpoint outputs. With user approval, launched private run [`dazai0/cancer-baseline-phase4-recovery`](https://www.kaggle.com/code/dazai0/cancer-baseline-phase4-recovery), version 1, on T4 GPU. It retrains the same baseline settings using pinned code `d038517`, then evaluates the best checkpoint and persists all artifacts. Experiment: `baseline_resnet50_recovery_20261028`. Submission status: **RUNNING**; real results and completion verification pending. Details: `docs/evaluation.md`.
+
 ---
 
 ## Chunk 5 — Explainability Engine  *(moved up — must exist before V&V)*

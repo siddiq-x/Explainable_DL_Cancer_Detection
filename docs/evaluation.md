@@ -2,12 +2,44 @@
 
 ## Current position
 
-- Phase 3 training was reported complete on Kaggle on 2026-10-26: ResNet-50,
+- Phase 3 training completed on Kaggle on 2026-10-26 (confirmed in the downloaded
+  training notebook's cell output): ResNet-50,
   best epoch **8**, validation loss **0.0607**, validation accuracy **0.6976**;
   early stopping at epoch **13**.
 - Phase 4 evaluation code and local synthetic-data checks are available.
 - The local project contains neither the real checkpoint nor real test reports.
   Test ROC-AUC, PR-AUC, sensitivity and specificity remain **unmeasured here**.
+
+## Automated recovery run — 2026-10-28
+
+Kaggle authentication succeeded as `dazai0`. The original notebook,
+`dazai0/notebookd76d211450`, contains the 13-epoch training log, but the API
+exposes no downloadable output checkpoint. The user approved retraining the
+baseline and automatically evaluating it.
+
+- **Submitted:** version 1 of the private run
+  [Cancer Baseline Phase4 Recovery](https://www.kaggle.com/code/dazai0/cancer-baseline-phase4-recovery).
+- **Runner:** [`scripts/kaggle_train_evaluate.py`](../scripts/kaggle_train_evaluate.py).
+- **Training/evaluation source:** pinned to `d0385179a7054b7f1d984bc2bde699689cde1bd5`.
+- **Experiment:** `baseline_resnet50_recovery_20261028` (a newly trained model).
+- **Compute:** T4 GPU; 30-epoch maximum, patience 5; submitted with a 3-hour runtime limit.
+- **Protocol:** original manifest, seed 42, original 2536/506/526 row splits,
+  original focal-loss/Adam settings; select the best validation-loss checkpoint
+  and evaluate all splits at threshold 0.5.
+- **Saved outputs:** `checkpoints/<experiment>/best.pt` and `last.pt`,
+  `reports/<experiment>/`, `phase4_results.zip`, full training history and loss
+  curve, `run_summary.json`, resolved config, manifest and pinned source archive.
+
+The run was confirmed **RUNNING** after submission. A local background monitor
+will download completed outputs to `reports/kaggle_phase4_recovery/` and check
+their counts and confusion matrices. **Completion and real metrics are pending.**
+
+To inspect or retrieve this run manually with an authenticated Kaggle CLI:
+
+```bash
+kaggle kernels status dazai0/cancer-baseline-phase4-recovery
+kaggle kernels output dazai0/cancer-baseline-phase4-recovery/1 -p reports/kaggle_phase4_recovery
+```
 
 ## Resume on Kaggle
 
