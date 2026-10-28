@@ -48,6 +48,10 @@ class MammographyDataset(Dataset):
         self.label_mapping = {'BENIGN': 0, 'MALIGNANT': 1}
         # In case the user hasn't mapped 'BENIGN_WITHOUT_CALLBACK' yet
         self.label_mapping['BENIGN_WITHOUT_CALLBACK'] = 0
+        normalized_labels = self.dataframe['label'].astype('string').str.strip().str.upper()
+        invalid = ~normalized_labels.isin(self.label_mapping)
+        if invalid.any():
+            raise ValueError(f"Unknown or missing labels in manifest: {self.dataframe.loc[invalid, 'label'].unique().tolist()}")
 
     def __len__(self):
         return len(self.dataframe)
@@ -61,13 +65,14 @@ class MammographyDataset(Dataset):
         
         # Load image and convert to RGB (standard for pre-trained backbones)
         try:
-            image = Image.open(img_name).convert('RGB')
+            with Image.open(img_name) as source:
+                image = source.convert('RGB')
         except Exception as e:
             raise IOError(f"Error loading image {img_name}: {e}")
 
         # Get label and convert to float32 tensor
         str_label = self.dataframe.loc[idx, 'label'].strip().upper()
-        label = self.label_mapping.get(str_label, 0) # default to 0 if unknown, though shouldn't happen
+        label = self.label_mapping[str_label]
         label_tensor = torch.tensor(label, dtype=torch.float32)
 
         if self.transform:

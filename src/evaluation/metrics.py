@@ -25,8 +25,24 @@ from sklearn.metrics import (
 
 
 def _as_1d(values: Any, dtype: Any = float) -> np.ndarray:
-    """Flatten any array-like to a 1-D NumPy array of the given dtype."""
-    return np.asarray(values, dtype=dtype).reshape(-1)
+    """Accept a vector or single-column array, not multi-class scores."""
+    array = np.asarray(values, dtype=dtype)
+    if array.ndim != 1 and not (array.ndim == 2 and array.shape[1] == 1):
+        raise ValueError("Expected a vector or an (N, 1) array.")
+    return array.reshape(-1)
+
+
+def validate_binary_inputs(y_true: Any, y_prob: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """Validate labels before integer conversion and probabilities before scoring."""
+    labels = _as_1d(y_true)
+    probabilities = _as_1d(y_prob)
+    if labels.size == 0 or labels.size != probabilities.size:
+        raise ValueError("Labels and probabilities must be nonempty and equal in length.")
+    if not np.isin(labels, [0, 1]).all():
+        raise ValueError("Labels must contain only 0 (benign) or 1 (malignant).")
+    if not np.isfinite(probabilities).all() or not ((probabilities >= 0) & (probabilities <= 1)).all():
+        raise ValueError("Probabilities must be finite values in [0, 1].")
+    return labels.astype(int), probabilities
 
 
 def _safe_roc_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
@@ -59,12 +75,13 @@ def compute_binary_metrics(
         Dict with accuracy, precision, recall/sensitivity, specificity, f1,
         roc_auc, pr_auc, the confusion-matrix counts (tn/fp/fn/tp) and support.
     """
-    y_true = _as_1d(y_true, dtype=int)
-    y_prob = _as_1d(y_prob, dtype=float)
+    y_true, y_prob = validate_binary_inputs(y_true, y_prob)
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("The decision threshold must be finite and in [0, 1].")
     y_pred = (y_prob >= float(threshold)).astype(int)
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    sensitivity = recall_score(y_true, y_pred, zero_division=0)
+    sensitivity = recall_score(y_true, y_pred, zero_division=0) if (tp + fn) > 0 else float("nan")
     specificity = tn / (tn + fp) if (tn + fp) > 0 else float("nan")
 
     return {
@@ -89,16 +106,21 @@ def compute_binary_metrics(
 def find_best_threshold(y_true: Any, y_prob: Any) -> Tuple[float, float]:
     """Find the threshold maximising Youden's J (sensitivity + specificity - 1).
 
+    Fit this on validation data only; keep it fixed for held-out test reporting.
+
     Returns:
         ``(best_threshold, best_youden_j)``. Falls back to ``(0.5, nan)`` when
         the ROC curve is undefined.
     """
-    y_true = _as_1d(y_true, dtype=int)
-    y_prob = _as_1d(y_prob, dtype=float)
+    y_true, y_prob = validate_binary_inputs(y_true, y_prob)
     if np.unique(y_true).size < 2:
         return 0.5, float("nan")
 
     fpr, tpr, thresholds = roc_curve(y_true, y_prob)
+    # sklearn's first threshold is infinity (older versions use max(score)+1).
+    # Exclude that sentinel so even tied/reversed rankings return a usable value.
+    valid = np.isfinite(thresholds) & (thresholds >= 0) & (thresholds <= 1)
+    fpr, tpr, thresholds = fpr[valid], tpr[valid], thresholds[valid]
     j_scores = tpr - fpr
     best_idx = int(np.argmax(j_scores))
     return float(thresholds[best_idx]), float(j_scores[best_idx])
@@ -106,16 +128,18 @@ def find_best_threshold(y_true: Any, y_prob: Any) -> Tuple[float, float]:
 
 def roc_points(y_true: Any, y_prob: Any) -> Tuple[np.ndarray, np.ndarray]:
     """Return ``(fpr, tpr)`` for plotting the ROC curve."""
-    y_true = _as_1d(y_true, dtype=int)
-    y_prob = _as_1d(y_prob, dtype=float)
+    y_true, y_prob = validate_binary_inputs(y_true, y_prob)
+    if np.unique(y_true).size < 2:
+        return np.array([]), np.array([])
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     return fpr, tpr
 
 
 def pr_points(y_true: Any, y_prob: Any) -> Tuple[np.ndarray, np.ndarray]:
     """Return ``(recall, precision)`` for plotting the precision-recall curve."""
-    y_true = _as_1d(y_true, dtype=int)
-    y_prob = _as_1d(y_prob, dtype=float)
+    y_true, y_prob = validate_binary_inputs(y_true, y_prob)
+    if np.unique(y_true).size < 2:
+        return np.array([]), np.array([])
     precision, recall, _ = precision_recall_curve(y_true, y_prob)
     return recall, precision
 
@@ -131,7 +155,7 @@ def format_metrics(metrics: Dict[str, float]) -> str:
         f"  specificity : {metrics['specificity']:.4f}",
         f"  f1          : {metrics['f1']:.4f}",
         f"  ROC-AUC     : {metrics['roc_auc']:.4f}",
-        f"  PR-AUC      : {metrics['pr_auc']:.4f}",
+        f"  PR-AUC (AP) : {metrics['pr_auc']:.4f}",
         "  confusion matrix (rows=true, cols=pred):",
         f"    TN={metrics['tn']:<5d} FP={metrics['fp']:<5d}",
         f"    FN={metrics['fn']:<5d} TP={metrics['tp']:<5d}",

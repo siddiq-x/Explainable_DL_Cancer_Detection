@@ -1,5 +1,5 @@
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from typing import List, Tuple
 
 def create_splits(manifest_path: str, test_size: float = 0.15, val_size: float = 0.15, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -73,18 +73,22 @@ def create_stratified_group_kfold(
     # Normalize to the binary task for stratification (BENIGN_WITHOUT_CALLBACK -> BENIGN).
     df = df.copy()
     df["label"] = df["label"].astype(str).str.upper().str.strip()
-    df["label"] = df["label"].where(df["label"] == "MALIGNANT", "BENIGN")
+    df["label"] = df["label"].replace({"BENIGN_WITHOUT_CALLBACK": "BENIGN"})
+    if df["patient_id"].isna().any() or not df["label"].isin(["BENIGN", "MALIGNANT"]).all():
+        raise ValueError("Cross-validation requires patient IDs and known binary labels.")
 
-    patients = df.groupby("patient_id")["label"].first().reset_index()
-    if patients["patient_id"].nunique() < k:
-        raise ValueError(
-            f"Not enough patients ({patients['patient_id'].nunique()}) for k={k} folds."
-        )
+    # A patient with any malignant finding is stratified as malignant in CV.
+    # Splitting one row per patient preserves groups without SGKF's approximate
+    # assignment (which can be very imbalanced when every group has size one).
+    patients = df.groupby("patient_id")["label"].max().reset_index()
+    counts = patients["label"].value_counts()
+    if k < 2 or len(counts) != 2 or counts.min() < k:
+        raise ValueError(f"Need k >= 2 and at least k patients in each class; k={k}, counts={counts.to_dict()}.")
 
-    splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+    splitter = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
     folds: List[Tuple[pd.DataFrame, pd.DataFrame]] = []
     for train_idx, val_idx in splitter.split(
-        patients, y=patients["label"], groups=patients["patient_id"]
+        patients, y=patients["label"]
     ):
         train_patients = set(patients.iloc[train_idx]["patient_id"])
         val_patients = set(patients.iloc[val_idx]["patient_id"])
@@ -95,3 +99,23 @@ def create_stratified_group_kfold(
             )
         )
     return folds
+
+
+def split_patient_validation(
+    dataframe: pd.DataFrame, val_size: float = 0.15, seed: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Reserve inner validation patients for early stopping within a CV fold.
+
+    The outer held-out fold is never used for checkpoint selection. Input is a
+    normalized binary dataframe from ``create_stratified_group_kfold``.
+    """
+    if not 0 < val_size < 1:
+        raise ValueError("Inner validation fraction must be between 0 and 1.")
+    patients = dataframe.groupby("patient_id")["label"].max().reset_index()
+    train_patients, val_patients = train_test_split(
+        patients, test_size=val_size, stratify=patients["label"], random_state=seed,
+    )
+    return (
+        dataframe[dataframe["patient_id"].isin(train_patients["patient_id"])].copy(),
+        dataframe[dataframe["patient_id"].isin(val_patients["patient_id"])].copy(),
+    )

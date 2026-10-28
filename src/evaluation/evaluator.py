@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import matplotlib
@@ -17,15 +18,19 @@ matplotlib.use("Agg")  # headless-safe (CLI / servers / Kaggle)
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 import torch  # noqa: E402
+from sklearn.metrics import classification_report  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
 
 from src.data.dataset import unpack_batch  # noqa: E402
+from src.data.splits import create_splits  # noqa: E402
 from src.evaluation.metrics import (  # noqa: E402
     compute_binary_metrics,
     format_metrics,
     pr_points,
     roc_points,
+    validate_binary_inputs,
 )
 from src.models.classifier import MammographyClassifier  # noqa: E402
 
@@ -34,7 +39,58 @@ def resolve_device(device: Optional[str] = None) -> torch.device:
     """Resolve ``None``/``"auto"`` to CUDA when available, else CPU."""
     if device in (None, "auto", "cuda-if-available"):
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device)
+    resolved = torch.device(device)
+    if resolved.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA is unavailable. Enable a Kaggle GPU accelerator or use --device cpu.")
+    return resolved
+
+
+def build_evaluation_config(
+    checkpoint: Mapping[str, Any], runtime_config: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Use saved split/preprocessing settings; allow paths and loader tuning to move.
+
+    Reconstructing a test split with the current YAML's seed or split ratios can
+    silently evaluate training patients. The checkpoint is authoritative for
+    these values. Legacy Chunk 3 checkpoints already contain all required keys.
+    """
+    saved = checkpoint.get("config") or {}
+    saved_data = saved.get("data") or {}
+    required = ("image_size",) if "split_patient_ids" in saved else ("image_size", "test_split_ratio", "val_split_ratio")
+    if "seed" not in saved or any(key not in saved_data for key in required):
+        raise ValueError("Checkpoint config lacks seed/image size/split ratios needed to reconstruct its held-out split.")
+    config = deepcopy(dict(saved))
+    for key in ("dataset_dir", "manifest_path", "batch_size", "num_workers"):
+        if key in runtime_config.get("data", {}):
+            config["data"][key] = runtime_config["data"][key]
+    config["evaluation"] = dict(runtime_config.get("evaluation") or {})
+    return config
+
+
+def build_evaluation_splits(config: Mapping[str, Any]) -> Dict[str, pd.DataFrame]:
+    """Reconstruct baseline splits or use exact patient assignments saved by CV."""
+    data_cfg = config["data"]
+    assignments = config.get("split_patient_ids")
+    if assignments is None:
+        frames = create_splits(
+            data_cfg["manifest_path"], test_size=float(data_cfg["test_split_ratio"]),
+            val_size=float(data_cfg["val_split_ratio"]), seed=int(config["seed"]),
+        )
+        return dict(zip(("train", "val", "test"), frames))
+
+    dataframe = pd.read_csv(data_cfg["manifest_path"])
+    patient_sets = [set(assignments[split]) for split in ("train", "val", "test")]
+    if any(not patients for patients in patient_sets):
+        raise ValueError("Saved patient splits cannot be empty.")
+    combined = set.union(*patient_sets)
+    if sum(map(len, patient_sets)) != len(combined):
+        raise ValueError("Saved patient splits overlap.")
+    if combined != set(dataframe["patient_id"].unique()):
+        raise ValueError("The manifest patient IDs differ from the saved splits.")
+    return {
+        split: dataframe[dataframe["patient_id"].isin(assignments[split])].copy()
+        for split in ("train", "val", "test")
+    }
 
 
 def load_model_from_checkpoint(
@@ -53,15 +109,19 @@ def load_model_from_checkpoint(
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     dev = resolve_device(device)
-    checkpoint = torch.load(checkpoint_path, map_location=dev, weights_only=False)
+    # Keep optimizer tensors on CPU; only the reconstructed model needs GPU RAM.
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     config = checkpoint.get("config") or {}
     model_cfg = config.get("model") or {}
 
     backbone = checkpoint.get("backbone") or model_cfg.get("backbone", "resnet50")
     num_classes = checkpoint.get("num_classes") or model_cfg.get("num_classes", 2)
+    if int(num_classes) != 2:
+        raise ValueError("Evaluation requires a binary, single-logit checkpoint (num_classes=2).")
 
     model = MammographyClassifier(
-        backbone=backbone, num_classes=int(num_classes), pretrained=False
+        backbone=backbone, num_classes=int(num_classes), pretrained=False,
+        dropout=float(model_cfg.get("dropout", 0.3)),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(dev)
@@ -100,7 +160,10 @@ def collect_predictions(
     for batch in loader:
         images, labels = unpack_batch(batch)
         images = images.to(dev)
-        probs = model.predict_proba(images).reshape(-1)
+        probs = model.predict_proba(images)
+        if probs.shape not in ((images.size(0),), (images.size(0), 1)):
+            raise ValueError("Expected one malignant probability per image.")
+        probs = probs.reshape(-1)
         y_true.extend(labels.reshape(-1).float().cpu().tolist())
         y_prob.extend(probs.cpu().tolist())
 
@@ -108,7 +171,8 @@ def collect_predictions(
             meta["image_path"].extend(list(batch.get("image_path", [])))
             meta["mask_path"].extend(list(batch.get("mask_path", [])))
 
-    return np.asarray(y_true), np.asarray(y_prob), meta
+    labels, probabilities = validate_binary_inputs(y_true, y_prob)
+    return labels, probabilities, meta
 
 
 def plot_roc_curve(y_true: np.ndarray, y_prob: np.ndarray, path: str) -> str:
@@ -117,7 +181,10 @@ def plot_roc_curve(y_true: np.ndarray, y_prob: np.ndarray, path: str) -> str:
     roc_auc = compute_binary_metrics(y_true, y_prob)["roc_auc"]
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot(fpr, tpr, label=f"ROC (AUC = {roc_auc:.3f})")
+    if fpr.size:
+        ax.plot(fpr, tpr, label=f"ROC (AUC = {roc_auc:.3f})")
+    else:
+        ax.text(0.5, 0.5, "ROC undefined: only one class", ha="center", transform=ax.transAxes)
     ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="chance")
     ax.set_xlabel("False positive rate (1 - specificity)")
     ax.set_ylabel("True positive rate (sensitivity)")
@@ -138,7 +205,10 @@ def plot_precision_recall_curve(
     prevalence = metrics["n_positive"] / max(metrics["n_samples"], 1)
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot(recall, precision, label=f"PR (AP = {metrics['pr_auc']:.3f})")
+    if recall.size:
+        ax.plot(recall, precision, label=f"PR (AP = {metrics['pr_auc']:.3f})")
+    else:
+        ax.text(0.5, 0.5, "PR-AUC undefined: only one class", ha="center", transform=ax.transAxes)
     ax.axhline(prevalence, color="k", linestyle="--", linewidth=1,
                label=f"baseline (prevalence = {prevalence:.2f})")
     ax.set_xlabel("Recall (sensitivity)")
@@ -204,27 +274,50 @@ def save_evaluation_artifacts(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     output_dir: str,
+    sample_info: Optional[pd.DataFrame] = None,
 ) -> Dict[str, str]:
-    """Write metrics JSON, a text report, and the three plots into ``output_dir``.
+    """Write metrics, per-class report, predictions and plots into ``output_dir``.
+
+    ``sample_info`` must follow the inference order (use a non-shuffled loader).
+    Undefined metrics become JSON null, rather than non-standard NaN tokens.
 
     Returns:
         Mapping of artifact name -> written path.
     """
+    y_true, y_prob = validate_binary_inputs(y_true, y_prob)
+    if sample_info is not None and len(sample_info) != len(y_true):
+        raise ValueError("Sample metadata length does not match predictions.")
     os.makedirs(output_dir, exist_ok=True)
 
     metrics_path = os.path.join(output_dir, "metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as fh:
-        json.dump(metrics, fh, indent=2)
+        json.dump(
+            {key: value if np.isfinite(value) else None for key, value in metrics.items()},
+            fh, indent=2, allow_nan=False,
+        )
 
     report_path = os.path.join(output_dir, "classification_report.txt")
     with open(report_path, "w", encoding="utf-8") as fh:
         fh.write("Classification report\n")
         fh.write("=====================\n")
         fh.write(format_metrics(metrics) + "\n")
+        fh.write("\nPR-AUC uses average precision (AP). Undefined metrics are shown as nan.\n\n")
+        fh.write(classification_report(
+            y_true, (y_prob >= metrics["threshold"]).astype(int), labels=[0, 1],
+            target_names=["BENIGN", "MALIGNANT"], digits=4, zero_division=0,
+        ))
+
+    predictions = pd.DataFrame() if sample_info is None else sample_info.reset_index(drop=True).copy()
+    predictions["y_true"] = y_true
+    predictions["malignant_probability"] = y_prob
+    predictions["y_pred"] = (y_prob >= metrics["threshold"]).astype(int)
+    predictions_path = os.path.join(output_dir, "predictions.csv")
+    predictions.to_csv(predictions_path, index=False)
 
     return {
         "metrics": metrics_path,
         "report": report_path,
+        "predictions": predictions_path,
         "roc_curve": plot_roc_curve(y_true, y_prob, os.path.join(output_dir, "roc_curve.png")),
         "pr_curve": plot_precision_recall_curve(
             y_true, y_prob, os.path.join(output_dir, "pr_curve.png")

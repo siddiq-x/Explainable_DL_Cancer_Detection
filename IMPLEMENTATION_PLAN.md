@@ -77,7 +77,7 @@
 
 **Deliverables:** Trained baseline checkpoint, training/validation loss curves.
 
-> **✅ Done (real-data run on Kaggle GPU).** ResNet-50 + focal loss (γ=2, α=0.25), Adam, `ReduceLROnPlateau`, grad-clip, early stopping. Patient-wise splits: **train 2536 / val 506 / test 526**. Early-stopped at epoch 13 (patience 5); **best checkpoint = epoch 8 — val_loss 0.0607, val_acc 0.698**. Artifacts: `checkpoints/baseline_resnet50/best.pt` (stores model/optimizer state, config, full history) and `loss_curves.png` — kept as Kaggle outputs (not committed). *Accuracy at a 0.5 threshold understates performance on imbalanced data; the clinical-grade metrics (ROC-AUC, PR-AUC, sensitivity) are the job of Chunk 4.*
+> **✅ Training completed (user-provided Kaggle GPU log, 2026-10-26).** ResNet-50 + focal loss (γ=2, α=0.25), Adam, `ReduceLROnPlateau`, grad-clip, early stopping. Patient-wise splits: **train 2536 / val 506 / test 526**. Early-stopped at epoch 13 (patience 5); **best checkpoint = epoch 8 — val_loss 0.0607, val_acc 0.6976**. The log confirms `checkpoints/baseline_resnet50/best.pt` was written on Kaggle; checkpoint persistence and the loss-curve export have not been verified locally. `best.pt` holds history through epoch 8; `last.pt` holds history through epoch 13. Test-set performance will be measured in Chunk 4.
 
 ---
 
@@ -97,6 +97,8 @@
 **Deliverables:** Classification report, ROC + PR curves, confusion matrix.
 
 > **Status:** code + unit tests complete — `src/evaluation/metrics.py` (accuracy, precision, sensitivity, specificity, F1, ROC-AUC, PR-AUC, confusion matrix, Youden-J threshold), `src/evaluation/evaluator.py` (checkpoint loading, inference, `metrics.json` + report + ROC/PR/confusion plots), `evaluate.py` CLI (`--split train|val|test|all`, and `--k-folds` for patient-wise stratified CV), `tests/test_metrics.py`, `tests/test_evaluator.py`. Epoch-level validation AUC is now tracked while training (`training.monitor: val_auc`). **Pending:** run `evaluate.py` on Kaggle against `checkpoints/baseline_resnet50/best.pt` to produce the real test-split report and curves.
+
+> **Review and continuation (2026-10-28):** evaluation now uses checkpoint-saved seed/image size/split ratios, with explicit path overrides for Kaggle. Prediction CSVs and run metadata make reports traceable. Metrics validate binary inputs and serialize undefined values as JSON null. CV uses independent inner validation for early stopping, restores best weights, computes training-only class weights, and records fold seeds and exact patient assignments. Local tests cover the CLI with legacy checkpoints and stale environment paths, plus fold isolation/checkpoint selection. Resume with `notebooks/03_evaluation_kaggle.ipynb` and `docs/evaluation.md`. **Still pending: saved real test outputs; Chunk 4 remains 🟡.**
 
 ---
 

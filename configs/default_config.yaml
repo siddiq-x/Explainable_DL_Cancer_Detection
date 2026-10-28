@@ -49,4 +49,3 @@ training:
 evaluation:
   threshold: 0.5        # decision threshold for hard-label metrics
   output_dir: "reports" # reports/<experiment>/<split>/ -> metrics.json + plots
-  k_folds: 5            # folds for patient-wise stratified cross-validation

@@ -83,15 +83,30 @@ python evaluate.py --checkpoint checkpoints/baseline_resnet50/best.pt --split al
 
 This writes `reports/<experiment>/<split>/` containing `metrics.json`,
 `classification_report.txt`, `roc_curve.png`, `pr_curve.png` and
-`confusion_matrix.png`. Reported metrics: accuracy, precision,
+`confusion_matrix.png`, plus `predictions.csv` and `run_info.json` for
+reproducibility. Reported metrics: accuracy, precision,
 sensitivity/recall, specificity, F1, **ROC-AUC** and **PR-AUC** (plus the
-confusion-matrix counts).
+confusion-matrix counts). PR-AUC uses average precision. Saved checkpoint
+settings determine the seed, image size and split ratios; paths can be
+overridden with `--dataset-dir` and `--manifest-path` (these take precedence
+over environment variables).
+
+**Resume Phase 4 on Kaggle:** import
+[`notebooks/03_evaluation_kaggle.ipynb`](notebooks/03_evaluation_kaggle.ipynb),
+attach the CBIS-DDSM dataset and saved Phase 3 `best.pt`, and run the cells in
+order. It discovers mounted paths and packages reports as `phase4_results.zip`.
+See [`docs/evaluation.md`](docs/evaluation.md) for the complete handoff and
+completion evidence. The real test results are still pending.
 
 Patient-wise stratified **K-fold cross-validation** (mean ± std stability):
 
 ```bash
 python evaluate.py --k-folds 5
 ```
+
+Each fold trains a fresh model, uses separate inner validation patients for
+early stopping, and scores the restored best weights on the outer held-out
+fold. Per-fold patient assignments and seeds are recorded in the results.
 
 > Metrics are compared against **published CBIS-DDSM baselines** (typical
 > ROC-AUC ≈ 0.80–0.87). They are targets for context, **not pass/fail gates**.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
@@ -19,8 +20,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from src.data.dataset import unpack_batch
-from src.models.losses import build_criterion
+from src.models.losses import build_criterion, compute_pos_weight
 from src.utils.logging_setup import setup_logger
+from src.utils.seeding import seed_everything
 
 
 def _resolve_device(device: Optional[str]) -> torch.device:
@@ -103,7 +105,7 @@ class Trainer:
         device: Optional[str] = None,
         logger: Optional[Any] = None,
     ) -> None:
-        self.config = dict(config)
+        self.config = deepcopy(dict(config))
         self.training_cfg = dict(config.get("training") or {})
         self.device = _resolve_device(device or self.training_cfg.get("device", "auto"))
         self.model = model.to(self.device)
@@ -111,7 +113,7 @@ class Trainer:
         self.val_loader = val_loader
         self.logger = logger or setup_logger()
 
-        self.criterion = criterion or build_criterion(self.training_cfg)
+        self.criterion = (criterion if criterion is not None else build_criterion(self.training_cfg)).to(self.device)
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=float(self.training_cfg.get("learning_rate", 1e-4)),
@@ -125,7 +127,13 @@ class Trainer:
         self.epochs = int(self.training_cfg.get("epochs", 30))
         self.patience = int(self.training_cfg.get("early_stopping_patience", 5))
         self.monitor = str(self.training_cfg.get("monitor", "val_loss"))
-        self._lower_is_better = "loss" in self.monitor
+        if self.monitor not in ("val_loss", "val_acc", "val_auc"):
+            raise ValueError("monitor must be val_loss, val_acc or val_auc.")
+        if self.monitor == "val_auc" and val_loader is None:
+            raise ValueError("val_auc monitoring requires a validation loader.")
+        if self.epochs < 1 or self.patience < 1:
+            raise ValueError("epochs and early_stopping_patience must be positive.")
+        self._lower_is_better = self.monitor == "val_loss"
 
         experiment_name = str(self.config.get("experiment_name", "experiment"))
         checkpoint_root = str(self.training_cfg.get("checkpoint_dir", "checkpoints"))
@@ -189,7 +197,8 @@ class Trainer:
             all_true.extend(labels.reshape(-1).detach().cpu().tolist())
             all_prob.extend(probs.detach().cpu().tolist())
 
-        total = max(total, 1)
+        if total == 0:
+            raise ValueError("Cannot train or validate on an empty loader.")
         return (
             total_loss / total,
             correct / total,
@@ -206,6 +215,8 @@ class Trainer:
                 "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "best_score": self.best_score,
+                "epochs_no_improve": self.epochs_no_improve,
+                "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler is not None else None,
                 "is_best": is_best,
                 "backbone": getattr(self.model, "backbone_name", None),
                 "num_classes": getattr(self.model, "num_classes", None),
@@ -270,8 +281,6 @@ class Trainer:
                 time.time() - started,
             )
 
-            self._save_checkpoint("last.pt", epoch, is_best=False)
-
             score = self._monitor_value(val_loss, val_acc, val_auc)
             improved = np.isfinite(score) and (
                 score < self.best_score
@@ -285,14 +294,14 @@ class Trainer:
                 self.logger.info("New best %s=%.4f -> %s", self.monitor, score, best_path)
             else:
                 self.epochs_no_improve += 1
-                if self.epochs_no_improve >= self.patience:
-                    self.logger.info(
-                        "Early stopping triggered at epoch %d (best %s=%.4f)",
-                        epoch + 1,
-                        self.monitor,
-                        self.best_score,
-                    )
-                    break
+            # Save after updating best_score/counters so last.pt is consistent.
+            self._save_checkpoint("last.pt", epoch, is_best=False)
+            if self.epochs_no_improve >= self.patience:
+                self.logger.info(
+                    "Early stopping triggered at epoch %d (best %s=%.4f)",
+                    epoch + 1, self.monitor, self.best_score,
+                )
+                break
 
         return self.history
 
@@ -302,7 +311,7 @@ class Trainer:
             "val_loss": val_loss,
             "val_acc": val_acc,
             "val_auc": val_auc,
-        }.get(self.monitor, val_loss)
+        }[self.monitor]
 
     @staticmethod
     def _safe_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
@@ -340,9 +349,10 @@ def cross_validate(
 ) -> Dict[str, Any]:
     """Run patient-wise, stratified K-fold cross-validation.
 
-    Trains ``k`` independent models (one per fold) and reports per-fold
-    validation metrics plus a mean ± std summary — the stability check (V-10)
-    used to argue the baseline is not a fluke of one split.
+    Trains ``k`` independent models. Within each outer training fold, reserve
+    inner validation patients for early stopping. Restore the selected best
+    checkpoint before scoring the untouched outer fold. These cross-validation
+    scores are distinct from the original baseline's held-out test report.
 
     Args:
         config: Full parsed config (``data``/``training``/``evaluation``/...).
@@ -368,7 +378,7 @@ def cross_validate(
     from src.data.augmentation import get_train_transforms
     from src.data.dataset import MammographyDataset
     from src.data.preprocessing import get_base_transforms
-    from src.data.splits import create_stratified_group_kfold
+    from src.data.splits import create_stratified_group_kfold, split_patient_validation
     from src.evaluation.evaluator import collect_predictions
     from src.evaluation.metrics import compute_binary_metrics
 
@@ -381,6 +391,8 @@ def cross_validate(
     threshold = float(
         threshold if threshold is not None else eval_cfg.get("threshold", 0.5)
     )
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("The decision threshold must be finite and in [0, 1].")
 
     logger = logger or setup_logger()
     folds_splits = create_stratified_group_kfold(manifest_path, k=k, seed=seed)
@@ -396,12 +408,20 @@ def cross_validate(
         "specificity": [],
     }
 
-    for fold_idx, (train_df, val_df) in enumerate(folds_splits):
+    for fold_idx, (development_df, test_df) in enumerate(folds_splits):
+        fold_seed = seed + fold_idx
+        seed_everything(fold_seed)
+        train_df, val_df = split_patient_validation(
+            development_df, val_size=float(data_cfg.get("val_split_ratio", 0.15)), seed=fold_seed,
+        )
         train_ds = MammographyDataset(
             train_df, root_dir=dataset_dir, transform=get_train_transforms(image_size)
         )
         val_ds = MammographyDataset(
             val_df, root_dir=dataset_dir, transform=get_base_transforms(image_size)
+        )
+        test_ds = MammographyDataset(
+            test_df, root_dir=dataset_dir, transform=get_base_transforms(image_size)
         )
         train_loader = DataLoader(
             train_ds,
@@ -417,27 +437,43 @@ def cross_validate(
             num_workers=num_workers,
             pin_memory=torch.cuda.is_available(),
         )
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
         logger.info(
-            "[k-fold] fold %d/%d - train=%d val=%d",
+            "[k-fold] fold %d/%d - train=%d inner_val=%d outer_test=%d",
             fold_idx + 1,
             k,
             len(train_ds),
             len(val_ds),
+            len(test_ds),
         )
         fold_name = f"{config.get('experiment_name', 'model')}_fold{fold_idx}"
+        fold_config = deepcopy(dict(config))
+        fold_config.update(experiment_name=fold_name, seed=fold_seed)
+        fold_config["split_patient_ids"] = {
+            "train": sorted(train_df["patient_id"].unique().tolist()),
+            "val": sorted(val_df["patient_id"].unique().tolist()),
+            "test": sorted(test_df["patient_id"].unique().tolist()),
+        }
+        criterion = build_criterion(
+            fold_config.get("training") or {}, pos_weight=compute_pos_weight(train_df["label"]),
+        )
         trainer = Trainer(
             model=model_factory(),
             train_loader=train_loader,
             val_loader=val_loader,
-            config={**config, "experiment_name": fold_name},
+            config=fold_config,
+            criterion=criterion,
             device=device,
             logger=logger,
         )
         history = trainer.train()
 
+        best_path = os.path.join(trainer.checkpoint_dir, "best.pt")
+        best = torch.load(best_path, map_location="cpu", weights_only=False)
+        trainer.model.load_state_dict(best["model_state_dict"])
         y_true, y_prob, _ = collect_predictions(
-            trainer.model, val_loader, device=str(trainer.device)
+            trainer.model, test_loader, device=str(trainer.device)
         )
         metrics = compute_binary_metrics(y_true, y_prob, threshold=threshold)
         for key in collected:
@@ -448,6 +484,11 @@ def cross_validate(
                 "fold": fold_idx,
                 "n_train": len(train_ds),
                 "n_val": len(val_ds),
+                "n_test": len(test_ds),
+                "seed": fold_seed,
+                "best_epoch": int(best["epoch"]) + 1,
+                "best_checkpoint": best_path,
+                "patients": fold_config["split_patient_ids"],
                 "metrics": metrics,
                 "history": {key: list(values) for key, values in history.items()},
             }
@@ -461,6 +502,7 @@ def cross_validate(
             metrics["sensitivity"],
             metrics["specificity"],
         )
+        del best, trainer
 
     summary: Dict[str, float] = {"k": float(k)}
     for key, values in collected.items():
@@ -481,6 +523,7 @@ def cross_validate(
     result: Dict[str, Any] = {
         "k": k,
         "threshold": threshold,
+        "protocol": "patient-wise outer folds; inner validation selects best checkpoint",
         "folds": folds,
         "summary": summary,
     }
@@ -489,7 +532,7 @@ def cross_validate(
         os.makedirs(output_dir, exist_ok=True)
         out_path = os.path.join(output_dir, "kfold_results.json")
         with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2)
+            json.dump(result, fh, indent=2, allow_nan=False)
         logger.info("[k-fold] results written to %s", out_path)
 
     return result

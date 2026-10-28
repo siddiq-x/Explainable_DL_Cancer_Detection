@@ -104,3 +104,42 @@ def test_format_metrics_contains_key_fields():
 
     for token in ("ROC-AUC", "PR-AUC", "sensitivity", "specificity", "f1"):
         assert token in report
+
+
+def test_nontrivial_ranking_auc_and_average_precision():
+    metrics = compute_binary_metrics([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8])
+    assert metrics["roc_auc"] == pytest.approx(0.75)
+    assert metrics["pr_auc"] == pytest.approx(5 / 6)
+
+
+@pytest.mark.parametrize("labels, scores", [
+    ([], []), ([0, 1], [0.5]), ([0.2, 1], [0.2, 0.8]),
+    ([0, 2], [0.2, 0.8]), ([0, np.nan], [0.2, 0.8]),
+    ([0, 1], [np.nan, 0.8]), ([0, 1], [0.2, np.inf]),
+    ([0, 1], [-0.1, 0.8]), ([0, 1], [0.2, 1.1]),
+    ([0, 1], [[0.1, 0.9], [0.9, 0.1]]),
+])
+def test_rejects_invalid_metric_inputs(labels, scores):
+    with pytest.raises(ValueError):
+        compute_binary_metrics(labels, scores)
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 1.1, np.inf, np.nan])
+def test_rejects_invalid_threshold(threshold):
+    with pytest.raises(ValueError, match="threshold"):
+        compute_binary_metrics([0, 1], [0.1, 0.9], threshold)
+
+
+def test_youden_threshold_is_usable_when_ranking_is_reversed():
+    threshold, score = find_best_threshold([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1])
+    assert np.isfinite(threshold) and 0 <= threshold <= 1
+    metrics = compute_binary_metrics([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1], threshold)
+    assert score == pytest.approx(metrics["sensitivity"] + metrics["specificity"] - 1)
+
+
+def test_absent_positive_class_has_undefined_sensitivity_and_auc():
+    metrics = compute_binary_metrics([0, 0], [0.2, 0.7])
+    assert np.isnan(metrics["sensitivity"])
+    assert np.isnan(metrics["roc_auc"])
+    assert np.isnan(metrics["pr_auc"])
+    assert metrics["specificity"] == 0.5
