@@ -1,4 +1,4 @@
-# Phase 4 — Evaluation handoff
+# Phase 4 — Evaluation workflow and completed run
 
 ## Current position
 
@@ -6,9 +6,11 @@
   training notebook's cell output): ResNet-50,
   best epoch **8**, validation loss **0.0607**, validation accuracy **0.6976**;
   early stopping at epoch **13**.
-- Phase 4 evaluation code and local synthetic-data checks are available.
-- The local project contains neither the real checkpoint nor real test reports.
-  Test ROC-AUC, PR-AUC, sensitivity and specificity remain **unmeasured here**.
+- **Phase 4 is complete.** The recovery run saved real checkpoints and reports
+  on Kaggle; both were downloaded and verified locally. Test ROC-AUC **0.7841**,
+  PR-AUC (AP) **0.7208**, sensitivity **0.3084**, specificity **0.9295** at 0.5.
+- See [`results.md`](results.md) for all split metrics, the confusion matrix,
+  interpretation, published reference and artifact provenance.
 
 ## Automated recovery run — 2026-10-28
 
@@ -17,7 +19,7 @@ Kaggle authentication succeeded as `dazai0`. The original notebook,
 exposes no downloadable output checkpoint. The user approved retraining the
 baseline and automatically evaluating it.
 
-- **Submitted:** version 1 of the private run
+- **Completed:** version 1 of the private run
   [Cancer Baseline Phase4 Recovery](https://www.kaggle.com/code/dazai0/cancer-baseline-phase4-recovery).
 - **Runner:** [`scripts/kaggle_train_evaluate.py`](../scripts/kaggle_train_evaluate.py).
 - **Training/evaluation source:** pinned to `d0385179a7054b7f1d984bc2bde699689cde1bd5`.
@@ -30,9 +32,11 @@ baseline and automatically evaluating it.
   `reports/<experiment>/`, `phase4_results.zip`, full training history and loss
   curve, `run_summary.json`, resolved config, manifest and pinned source archive.
 
-The run was confirmed **RUNNING** after submission. A local background monitor
-will download completed outputs to `reports/kaggle_phase4_recovery/` and check
-their counts and confusion matrices. **Completion and real metrics are pending.**
+The run completed at **2026-10-28 18:50:53 UTC**, in **69.2 minutes**. Training
+selected **epoch 12** and stopped after **17 epochs**. The background monitor
+downloaded outputs to `reports/kaggle_phase4_recovery/`. Local verification
+recomputed every metric from predictions, confirmed manifest/split membership
+and patient isolation, and validated checkpoint metadata, hash and ZIP integrity.
 
 To inspect or retrieve this run manually with an authenticated Kaggle CLI:
 
@@ -41,7 +45,7 @@ kaggle kernels status dazai0/cancer-baseline-phase4-recovery
 kaggle kernels output dazai0/cancer-baseline-phase4-recovery/1 -p reports/kaggle_phase4_recovery
 ```
 
-## Resume on Kaggle
+## Evaluate a saved checkpoint again on Kaggle
 
 Use `notebooks/03_evaluation_kaggle.ipynb` after syncing this project's changes
 to GitHub. Upload/import that notebook in Kaggle and run its cells in order.
@@ -49,17 +53,17 @@ to GitHub. Upload/import that notebook in Kaggle and run its cells in order.
 Attach these inputs:
 
 1. `awsaf49/cbis-ddsm-breast-cancer-image-dataset`.
-2. The saved Phase 3 `best.pt` from your training notebook output or an uploaded
-   Kaggle Dataset. If available, also attach the sibling `last.pt` for full loss
-   history. The notebook lists candidates when several checkpoints are present.
+2. The completed `dazai0/cancer-baseline-phase4-recovery` notebook output as an
+   input, which includes `best.pt` and `last.pt`. The notebook lists candidates
+   when several checkpoints are present.
 
 The notebook handles both the old and newer `/kaggle/input/datasets/...` mount
 layouts, uses explicit paths, checks that the checkpoint exists, evaluates only
 the held-out test split, and packages results into `phase4_results.zip`.
 Inference can use CPU or GPU; it does not require downloading ImageNet weights.
 
-For an existing Kaggle checkout and a checkpoint still under `/kaggle/working`,
-the equivalent cell is:
+For an existing Kaggle checkout and the recovery checkpoint still under
+`/kaggle/working`, the equivalent cell is:
 
 ```python
 from pathlib import Path
@@ -68,7 +72,7 @@ import subprocess, sys
 repo = Path('/kaggle/working/Explainable_DL_Cancer_Detection')
 subprocess.run([
     sys.executable, str(repo / 'evaluate.py'),
-    '--checkpoint', '/kaggle/working/checkpoints/baseline_resnet50/best.pt',
+    '--checkpoint', '/kaggle/working/checkpoints/baseline_resnet50_recovery_20261028/best.pt',
     '--dataset-dir', '/kaggle/input/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset',
     '--manifest-path', str(repo / 'data/manifest.csv'),
     '--split', 'test', '--device', 'auto', '--num-workers', '2',
@@ -127,11 +131,12 @@ history, outer-fold metrics and mean/population-standard-deviation summary.
 Checkpoints retain their exact split patient IDs for subsequent evaluation.
 These CV results use the whole manifest under a different protocol; they are
 reported separately from the original baseline's held-out test results.
+The real five-fold run has not been executed; it remains the Phase 6 V-10
+stability evaluation. Phase 4 implemented and tested the CV support.
 
 ## Completion evidence
 
-Bring back the test report, prediction CSV, run metadata and plots, and record
-the achieved values with the saved Kaggle output location. Only then mark
-Phase 4 complete. Compare published results using matching units (patch/image/
-patient), split protocols and subsets; the plan's rough AUC range is context,
-not a measured result for this model.
+The real test report, prediction CSV, run metadata, plots and checkpoints are
+now saved and verified. [`results.md`](results.md) records the achieved values
+and the exact Kaggle output location. The comparison to Shen et al. (2019)
+explains the differences in reporting unit, data subset and training protocol.

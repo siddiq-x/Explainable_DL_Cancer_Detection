@@ -92,15 +92,15 @@
 | 4 | K-Fold cross-validation support | `src/models/trainer.py` |
 | 5 | Unit tests with known inputs/outputs | `tests/test_metrics.py` |
 
-> **Metrics are targets, not pass/fail gates.** Report achieved scores **against published CBIS-DDSM baselines** (typical ROC-AUC ≈ 0.80–0.87). A score below a round number is not a project failure — context vs. baseline is what matters.
+> **Metrics are targets, not pass/fail gates.** Report achieved scores **against published CBIS-DDSM baselines**. For context, [Shen et al. (2019)](https://doi.org/10.1038/s41598-019-48995-4) reported per-image ROC-AUC 0.88 (single model) and 0.91 (ensemble), using a different subset and training protocol. See `docs/results.md` for the comparison.
 
 **Deliverables:** Classification report, ROC + PR curves, confusion matrix.
 
-> **Status:** code + unit tests complete — `src/evaluation/metrics.py` (accuracy, precision, sensitivity, specificity, F1, ROC-AUC, PR-AUC, confusion matrix, Youden-J threshold), `src/evaluation/evaluator.py` (checkpoint loading, inference, `metrics.json` + report + ROC/PR/confusion plots), `evaluate.py` CLI (`--split train|val|test|all`, and `--k-folds` for patient-wise stratified CV), `tests/test_metrics.py`, `tests/test_evaluator.py`. Epoch-level validation AUC is now tracked while training (`training.monitor: val_auc`). **Pending:** run `evaluate.py` on Kaggle against `checkpoints/baseline_resnet50/best.pt` to produce the real test-split report and curves.
+> **✅ Complete (verified 2026-10-29):** evaluation implementation and tests pass, and real Kaggle train/validation/test reports, prediction exports and curves are saved and verified. Epoch-level validation AUC and patient-wise CV support are implemented. Real five-fold stability evaluation remains Phase 6, V-10.
 
-> **Review and continuation (2026-10-28):** evaluation now uses checkpoint-saved seed/image size/split ratios, with explicit path overrides for Kaggle. Prediction CSVs and run metadata make reports traceable. Metrics validate binary inputs and serialize undefined values as JSON null. CV uses independent inner validation for early stopping, restores best weights, computes training-only class weights, and records fold seeds and exact patient assignments. Local tests cover the CLI with legacy checkpoints and stale environment paths, plus fold isolation/checkpoint selection. Resume with `notebooks/03_evaluation_kaggle.ipynb` and `docs/evaluation.md`. **Still pending: saved real test outputs; Chunk 4 remains 🟡.**
+> **Implementation review (2026-10-28):** evaluation uses checkpoint-saved seed/image size/split ratios, with explicit path overrides for Kaggle. Prediction CSVs and run metadata make reports traceable. Metrics validate binary inputs and serialize undefined values as JSON null. CV uses independent inner validation for early stopping, restores best weights, computes training-only class weights, and records fold seeds and exact patient assignments. Local suite: **58 passed, 1 skipped**; notebook schema and Python cells validated. Workflow: `notebooks/03_evaluation_kaggle.ipynb` and `docs/evaluation.md`.
 
-> **Kaggle recovery submitted (2026-10-28):** the original training log was retrieved, but Kaggle exposes no saved checkpoint outputs. With user approval, launched private run [`dazai0/cancer-baseline-phase4-recovery`](https://www.kaggle.com/code/dazai0/cancer-baseline-phase4-recovery), version 1, on T4 GPU. It retrains the same baseline settings using pinned code `d038517`, then evaluates the best checkpoint and persists all artifacts. Experiment: `baseline_resnet50_recovery_20261028`. Submission status: **RUNNING**; real results and completion verification pending. Details: `docs/evaluation.md`.
+> **Kaggle recovery completed (2026-10-28 UTC):** private run [`dazai0/cancer-baseline-phase4-recovery`](https://www.kaggle.com/code/dazai0/cancer-baseline-phase4-recovery), version 1, trained the same baseline settings using pinned code `d038517`. Experiment: `baseline_resnet50_recovery_20261028`. **Best epoch 12 / stopped epoch 17**, validation loss **0.05775**, validation ROC-AUC **0.7982**; total runtime **69.2 minutes**. On **526 test rows (235 patients)**: accuracy **0.6768**, precision **0.7500**, sensitivity **0.3084**, specificity **0.9295**, F1 **0.4371**, ROC-AUC **0.7841**, PR-AUC (AP) **0.7208** at threshold 0.5. Confusion counts: **TN 290 / FP 22 / FN 148 / TP 66**. All artifacts downloaded to `reports/kaggle_phase4_recovery/`; metric recomputation, split isolation, checkpoint hash/metadata and ZIP integrity passed. Analysis and literature context: `docs/results.md`.
 
 ---
 
@@ -248,7 +248,7 @@ Requirements → Verification → Model Validation → Explanation-vs-ROI Valida
 | 1 | Project Setup & Environment | MVP | ✅ |
 | 2 | Data Loading & Preprocessing | MVP | ✅ |
 | 3 | Baseline Classification Model | MVP | ✅ |
-| 4 | Evaluation & Metrics | MVP | 🟡 |
+| 4 | Evaluation & Metrics | MVP | ✅ |
 | 5 | Explainability Engine | MVP | ⬜ |
 | 6 | Verification & Validation | MVP | ⬜ |
 | 7 | Lesion Localization | Stretch | ⬜ |

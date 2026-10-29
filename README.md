@@ -91,12 +91,19 @@ settings determine the seed, image size and split ratios; paths can be
 overridden with `--dataset-dir` and `--manifest-path` (these take precedence
 over environment variables).
 
-**Resume Phase 4 on Kaggle:** import
+**Evaluate a saved checkpoint on Kaggle:** import
 [`notebooks/03_evaluation_kaggle.ipynb`](notebooks/03_evaluation_kaggle.ipynb),
-attach the CBIS-DDSM dataset and saved Phase 3 `best.pt`, and run the cells in
+attach the CBIS-DDSM dataset and completed recovery run's `best.pt`, and run the cells in
 order. It discovers mounted paths and packages reports as `phase4_results.zip`.
 See [`docs/evaluation.md`](docs/evaluation.md) for the complete handoff and
-completion evidence. The real test results are still pending.
+completion evidence.
+
+**Phase 4 completed:** the Kaggle recovery baseline achieved test **ROC-AUC
+0.7841**, **PR-AUC (AP) 0.7208** and **accuracy 67.68%** on 526 abnormality rows
+from 235 held-out patients. At threshold 0.5, sensitivity was **30.84%** and
+specificity **92.95%**: 148 of 214 malignant rows were missed. Checkpoints and
+plots are saved on Kaggle and downloaded locally. See
+[`docs/results.md`](docs/results.md) for the full results and artifact paths.
 
 Patient-wise stratified **K-fold cross-validation** (mean ± std stability):
 
@@ -108,8 +115,10 @@ Each fold trains a fresh model, uses separate inner validation patients for
 early stopping, and scores the restored best weights on the outer held-out
 fold. Per-fold patient assignments and seeds are recorded in the results.
 
-> Metrics are compared against **published CBIS-DDSM baselines** (typical
-> ROC-AUC ≈ 0.80–0.87). They are targets for context, **not pass/fail gates**.
+> For context, [Shen et al. (2019)](https://doi.org/10.1038/s41598-019-48995-4)
+> reported CBIS-DDSM per-image ROC-AUC 0.88 (single model) and 0.91 (ensemble).
+> Their subset, reporting unit and training protocol differ; see the comparison
+> in `docs/results.md`. Scores are **not pass/fail gates** for evaluation tooling.
 
 ## Reproducibility
 We ensure reproducibility via global seeding utilities in `src/utils/seeding.py` and strict hyperparameter tracking. Dataset locations are overridable via the `CANCER_DATASET_DIR` and `CANCER_MANIFEST_PATH` environment variables, so the identical codebase runs unchanged on a laptop (mock data) and on a cloud GPU (full dataset).
